@@ -151,12 +151,16 @@ function git__clone {
 
 
 function ssh__generate_key {
+	local output_path="$SSH_DIRECTORY"
+	local output_path__parent_dir="$( dirname "$output_path" )"
+
 	local application=""
 	local type="ed25519"
 	local type_arg="t"
 	local user=""
 
 	local ssh_keygen_args=()
+
 
 	function ssh__generate_key__case_function {
 		case "$arg" in
@@ -179,9 +183,9 @@ function ssh__generate_key {
 		--case-function="ssh__generate_key__case_function" \
 		"$@"
 
+
 	ssh_keygen_args+=( "-$type_arg" "$type" )
 
-	local output_path="$SSH_DIRECTORY"
 
 	if [ "$application" ]; then
 		output_path+="/applications/$application"
@@ -191,17 +195,14 @@ function ssh__generate_key {
 
 	local access_check_dir="$output_path"
 
-	while [ "$access_check_dir" != "$( dirname "$SSH_DIRECTORY" )" ]; do
+	while [ "$access_check_dir" != "$output_path__parent_dir" ]; do
 		chmod 700 "$access_check_dir"
 
 		access_check_dir="$( dirname "$access_check_dir" )"
 	done
 
-	if [ "$user" ]; then
-		output_path+="/${user}_$type.pem"
-	else
-		output_path+="/id_$type.pem"
-	fi
+	output_path+="/${user:-"id"}--$type.pem"
+
 
 	ssh-keygen \
 		-C "$application-$user--$( hostname )" \
