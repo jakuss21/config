@@ -2,7 +2,7 @@ SSH_DIRECTORY="$HOME/.ssh"
 
 
 
-function parameters_process {
+function parameters__process {
 	local case_function=""
 	local options_no_value=()
 
@@ -16,7 +16,7 @@ function parameters_process {
 				;;
 			*)
 				if [ ! "$case_function" ]; then
-					echo >&2 "${FUNCNAME[0]}: Required parameters not provided"
+					>&2 printf '%b\n' "${FUNCNAME[0]}: Required parameters not provided"
 					return 1
 				fi
 
@@ -29,7 +29,7 @@ function parameters_process {
 
 
 	if [ "$( type -t "$case_function" )" != "function" ]; then
-		echo >&2 "${FUNCNAME[0]}: First parameter must be case function name"
+		>&2 printf '%b\n' "${FUNCNAME[0]}: Parameter \"--case-function\" must be a function name"
 		return 1;
 	fi
 
@@ -38,7 +38,8 @@ function parameters_process {
 
 	while [ "$1" ]; do
 		local arg="$1"
-		local value=""
+		local arg_full="$arg"
+		local arg_value=""
 
 		if [ ! "$stop_processing" ] && [[ "$arg" =~ ^"-" ]]; then
 			if [ "$arg" = "--" ]; then
@@ -47,18 +48,18 @@ function parameters_process {
 				continue
 			fi
 
-			if [ "$arg" != "-" ]; then
-				arg="$( echo "$arg" | sed 's/^-*//' )"
+			if [[ "$arg" =~ [^"-"] ]]; then
+				arg="$( printf '%s' "$arg" | sed 's/^-*//' )"
 
 				if [[ "$arg" =~ "=" ]]; then
 					local arg_value_array=( ${arg/"="/" "} )
 
 					arg="${arg_value_array[0]}"
-					value="${arg_value_array[1]}"
+					arg_value="${arg_value_array[1]}"
 				else
 					if [[ ! " ${options_no_value[@]} " =~ " $arg " ]]; then
 						if [ "$2" ] && [[ ! "$2" =~ ^"-" ]]; then
-							value="$2"
+							arg_value="$2"
 							shift
 						fi
 					fi
@@ -66,7 +67,7 @@ function parameters_process {
 			fi
 		fi
 
-		"$case_function" "$arg" "$value"
+		"$case_function"
 
 		shift
 	done
@@ -74,7 +75,7 @@ function parameters_process {
 
 
 
-function get_url_domain_name {
+function url__get_domain_name {
 	local url="$1"
 
 	local grep_command="grep -oP"
@@ -87,7 +88,6 @@ function get_url_domain_name {
 
 	echo "$domain_name"
 }
-
 
 
 
@@ -114,7 +114,7 @@ function git__clone {
 
 	if [ -d "$SSH_DIRECTORY" ]; then
 		if [ "$ssh_url" ]; then
-			local ssh_domain_name="$( get_url_domain_name "$ssh_url" )"
+			local ssh_domain_name="$( url__get_domain_name "$ssh_url" )"
 
 			local ssh_key_domain_directory="$SSH_DIRECTORY/$ssh_domain_name"
 
@@ -150,6 +150,66 @@ function git__clone {
 }
 
 
+function ssh__generate_key {
+	local application=""
+	local type="ed25519"
+	local type_arg="t"
+	local user=""
+
+	local ssh_keygen_args=()
+
+	function ssh__generate_key__case_function {
+		case "$arg" in
+			"application")
+				application="$arg_value"
+				;;
+			"$type_arg")
+				type="$arg_value"
+				;;
+			"user")
+				user="$arg_value"
+				;;
+			*)
+				ssh_keygen_args+=( "$arg_full" "$arg_value" )
+				;;
+		esac
+	}
+
+	parameters__process \
+		--case-function="ssh__generate_key__case_function" \
+		"$@"
+
+	ssh_keygen_args+=( "-$type_arg" "$type" )
+
+	local output_path="$SSH_DIRECTORY"
+
+	if [ "$application" ]; then
+		output_path+="/applications/$application"
+	fi
+
+	mkdir --parents "$output_path"
+
+	local access_check_dir="$output_path"
+
+	while [ "$access_check_dir" != "$( dirname "$SSH_DIRECTORY" )" ]; do
+		chmod 700 "$access_check_dir"
+
+		access_check_dir="$( dirname "$access_check_dir" )"
+	done
+
+	if [ "$user" ]; then
+		output_path+="/${user}_$type.pem"
+	else
+		output_path+="/id_$type.pem"
+	fi
+
+	ssh-keygen \
+		-C "$application-$user--$( hostname )" \
+		-f "$output_path" \
+		-t "$type"
+}
+
+
 
 alias c="clear"
 alias e="exit"
@@ -160,3 +220,5 @@ alias drs="./*/manage.py runserver 0.0.0.0:8000"
 
 alias gc="git__clone"
 alias gs="git status"
+
+alias sshg="ssh__generate_key"
