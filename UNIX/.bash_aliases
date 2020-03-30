@@ -1,4 +1,5 @@
 SSH_DIRECTORY="$HOME/.ssh"
+SSH_APPLICATION_DIRECTORY="$SSH_DIRECTORY/applications"
 
 
 
@@ -89,71 +90,122 @@ function url__get_domain_name {
 	echo "$domain_name"
 }
 
+function url__is_ssh {
+	if [[ "$1" =~ ^"git@"|("git"|"ssh")"://" ]]; then
+		return 0
+	fi
+
+	return 1
+}
 
 
-function git__in_directory {
-	git rev-parse --absolute-git-dir >/dev/null 2>&1
 
-	return $?
+
+function git__export_ssh_command {
+	if [ "$1" ]; then
+		export GIT_SSH_COMMAND="$1"
+	else
+		unset GIT_SSH_COMMAND
+	fi
 }
 
 function git__clone {
 	local args=( "$@" )
 
-	local default_ssh_key="$SSH_DIRECTORY/id_rsa"
+	local git_ssh_command=""
+	local git_ssh_command_old="$GIT_SSH_COMMAND"
 
-	local ssh_url=""
-	local ssh_keys=()
+
+	local repo_url=""
 
 	for arg in "${args[@]}"; do
-		if [[ "$arg" =~ "@" ]]; then
-			ssh_url="$arg"
-			break
+		if url__is_ssh "$arg"; then
+			repo_url="$arg"
 		fi
 	done
 
+	if [ ! "$repo_url" ]; then
+		git clone "$@"
+
+		return $?
+	fi
+
+
+	local application="$( url__get_domain_name "$repo_url" )"
+	local application_ssh_directory="$SSH_APPLICATION_DIRECTORY/$application"
+
+
+	local ssh_keys=()
+
 	if [ -d "$SSH_DIRECTORY" ]; then
-		if [ "$ssh_url" ]; then
-			local ssh_domain_name="$( url__get_domain_name "$ssh_url" )"
+		for ssh_key_path in "$SSH_DIRECTORY/"*; do
+			if [ -f "$ssh_key_path" ]; then
+				local ssh_key_path_basename="$( basename "$ssh_key_path" )"
 
-			local ssh_key_domain_directory="$SSH_DIRECTORY/$ssh_domain_name"
-
-			if [ -d "$ssh_key_domain_directory" ]; then
-				for domain_ssh_key in "$ssh_key_domain_directory/"*; do
-					if [[ ! "$domain_ssh_key" =~ ".pub"$ ]]; then
-						ssh_keys+=("$domain_ssh_key")
-					fi
-				done
+				if [[ "$ssh_key_path_basename" =~ ^"id" ]] && [[ ! "$ssh_key_path_basename" =~ ".pub"$ ]]; then
+					ssh_keys+=( "$ssh_key_path" )
+				fi
 			fi
-		fi
+		done
 	fi
 
-	if [ -f "$default_ssh_key" ]; then
-		ssh_keys+=("$default_ssh_key")
+	if [ -d "$application_ssh_directory" ]; then
+		for application_ssh_key_path in "$application_ssh_directory/"*; do
+			if [ -f "$application_ssh_key_path" ] && [[ ! "$application_ssh_key_path" =~ ".pub"$ ]]; then
+				ssh_keys+=( "$application_ssh_key_path" )
+			fi
+		done
 	fi
+
 
 	for ssh_key in "${ssh_keys[@]}"; do
 		export GIT_SSH_COMMAND="ssh -i \"$ssh_key\""
 
-		git ls-remote "$ssh_url" > /dev/null 2>&1
+		git ls-remote "$repo_url" >/dev/null 2>&1
 
 		if [ $? -eq 0 ]; then
+			git_ssh_command="$GIT_SSH_COMMAND"
+
 			break
 		else
-			unset GIT_SSH_COMMAND
+			git__export_ssh_command "$git_ssh_command_old"
 		fi
 	done
 
-	git clone "$@"
 
-	unset GIT_SSH_COMMAND
+	local clone_output=""
+	local clone_return_value=""
+	local repo_dir=""
+
+	clone_output="$( git clone --progress "$@" 2>&1 )"
+	clone_return_value=$?
+
+	if [ "$git_ssh_command" ] && [ "$clone_return_value" -eq 0 ]; then
+		local cloning_into_output="$( printf '%b' "$clone_output" | head -1 )"
+
+		if [[ "$cloning_into_output" =~ ^"Cloning into" ]]; then
+			repo_dir="$( printf '%s' "$cloning_into_output" | grep -oP "'.*?'" )"
+			repo_dir="${repo_dir%\'}"
+			repo_dir="${repo_dir#\'}"
+			repo_dir+="/.git"
+
+			git --git-dir="$repo_dir" config core.sshCommand "$git_ssh_command"
+		fi
+	fi
+
+	printf '%b\n' "$clone_output"
+
+
+	git__export_ssh_command "$git_ssh_command_old"
+
+
+	return "$clone_return_value"
 }
 
 
-function ssh__generate_key {
-	local output_path="$SSH_DIRECTORY"
-	local output_path__parent_dir="$( dirname "$output_path" )"
 
+
+function ssh__generate_key {
 	local application=""
 	local type="ed25519"
 	local type_arg="t"
@@ -187,15 +239,19 @@ function ssh__generate_key {
 	ssh_keygen_args+=( "-$type_arg" "$type" )
 
 
+	local output_path=""
+
 	if [ "$application" ]; then
-		output_path+="/applications/$application"
+		output_path="$SSH_APPLICATION_DIRECTORY/$application"
+	else
+		output_path="$SSH_DIRECTORY"
 	fi
 
 	mkdir --parents "$output_path"
 
 	local access_check_dir="$output_path"
 
-	while [ "$access_check_dir" != "$output_path__parent_dir" ]; do
+	while [ "$access_check_dir" != "$( dirname "$SSH_DIRECTORY" )" ]; do
 		chmod 700 "$access_check_dir"
 
 		access_check_dir="$( dirname "$access_check_dir" )"
@@ -203,6 +259,8 @@ function ssh__generate_key {
 
 	output_path+="/${user:-"id"}--$type.pem"
 
+
+	printf '%b\n\n' "Creating $type key: \"$output_path\""
 
 	ssh-keygen \
 		-C "$application-$user--$( hostname )" \
@@ -219,7 +277,12 @@ alias sb="source $HOME/.bashrc"
 alias dcs="./*/manage.py collectstatic --no-input"
 alias drs="./*/manage.py runserver 0.0.0.0:8000"
 
-alias gc="git__clone"
+alias ga="git add"
+alias gc="git commit"
+alias gcl="git__clone"
+alias gco="git checkout"
+alias gp="git push"
+alias gpl="git pull"
 alias gs="git status"
 
 alias sshg="ssh__generate_key"
